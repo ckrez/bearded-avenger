@@ -192,10 +192,12 @@ class IndicatorManager(IndicatorManagerPlugin):
 
         #self.lockm.lock_aquire()
         for d in indicators:
+            # check to see if duplicate in batch
             if was_added.get(d['indicator']):
-                for first in was_added[d['indicator']]: break
-                if d.get('reporttime') and d['reporttime'] < first:
-                    continue
+                # prefer older reportimes
+                for first in was_added[d['indicator']]:
+                    if d.get('reporttime') < first:
+                        continue
 
             filters = {
                 'indicator': d['indicator'],
@@ -209,10 +211,13 @@ class IndicatorManager(IndicatorManagerPlugin):
             if d.get('rdata'):
                 filters['rdata'] = d['rdata']
 
+            # search for existing, return latest record
             rv = self.search(token, filters, sort='reporttime', raw=True)
             rv = rv['hits']['hits']
 
+            # Indicator does not exist in results
             if len(rv) == 0:
+                # check to see if duplicate indicator, lasttime in batch
                 if was_added.get(d['indicator']):
                     if d.get('lasttime') in was_added[d['indicator']]:
                         logger.debug('skipping: %s' % d['indicator'])
@@ -226,70 +231,97 @@ class IndicatorManager(IndicatorManagerPlugin):
                 if d.get('group') and type(d['group']) != list:
                     d['group'] = [d['group']]
 
+                # is this redundant to store init code? no harm in leaving it
                 self._timestamps_fix(d)
                 expand_ip_idx(d)
 
+                # append create to create set
                 actions.append({
                     '_index': self._current_index(),
                     '_type': 'indicator',
                     '_source': d,
                 })
 
+                # add for future batch dedup checks
                 was_added[d['indicator']].add(d['reporttime'])
+
                 count += 1
                 continue
 
+            # Indicator exists in results
             else:
                 i = rv[0]
 
+                # skip older indicators
                 if not self._is_newer(d, i['_source']):
                     logger.debug('skipping...')
                     continue
 
-            # carry the index'd data forward and remove the old index
-            # TODO- don't we already have this via the search?
-            #i = self.handle.get(index=r['_index'], doc_type='indicator', id=r['_id'])
-            i = i['_source']
+                # carry the index'd data forward and remove the old index
+                # TODO- don't we already have this via the search?
+                #i = self.handle.get(index=r['_index'], doc_type='indicator', id=r['_id'])
 
-            # we're working within the same index
-            if rv[0]['_index'] == self._current_index():
-                i['count'] += 1
-                i['lasttime'] = d['lasttime']
-                i['reporttime'] = d['lasttime']
+                # map existing indicator
+                i = i['_source']
 
-                if d.get('message'):
-                    if not i.get('message'):
-                        i['message'] = []
+                # we're working within the same index
+                if rv[0]['_index'] == self._current_index():
 
-                    i['message'].append(d['message'])
+                    # update fields
+                    i['count'] += 1
+                    i['lasttime'] = d['lasttime']
+                    i['reporttime'] = d['lasttime']
 
-                actions.append({
-                    '_op_type': 'update',
-                    '_index': rv[0]['_index'],
-                    '_type': 'indicator',
-                    '_id': rv[0]['_id'],
-                    '_body': {'doc': i}
-                })
-                continue
+                    if d.get('message'):
+                        if not i.get('message'):
+                            i['message'] = []
 
-            # carry the information forward into the next month's index
-            d['count'] = i['count'] + 1
-            i['lasttime'] = d['lasttime']
-            i['reporttime'] = d['lasttime']
+                        i['message'].append(d['message'])
 
-            if d.get('message'):
-                if not i.get('message'):
-                    i['message'] = []
+                    # append update to create set
+                    actions.append({
+                        '_op_type': 'update',
+                        '_index': rv[0]['_index'],
+                        '_type': 'indicator',
+                        '_id': rv[0]['_id'],
+                        '_body': {'doc': i}
+                    })
 
-                i['message'].append(d['message'])
+                    count += 1
+                    continue
 
-            # delete the old document
-            actions.append({
-                '_op_type': 'delete',
-                '_index': rv[0]['_index'],
-                '_type': 'indicator',
-                '_id': rv[0]['_id']
-            })
+                # if we aren't in the same index
+                else:
+
+                    # update fields
+                    i['count'] = i['count'] + 1
+                    i['lasttime'] = d['lasttime']
+                    i['reporttime'] = d['lasttime']
+
+                    if d.get('message'):
+                        if not i.get('message'):
+                            i['message'] = []
+
+                        i['message'].append(d['message'])
+
+                    # append create to create set
+                    actions.append({
+                        '_index': self._current_index(),
+                        '_type': 'indicator',
+                        '_source': i,
+                    })
+
+                    # delete the old document
+                    actions.append({
+                        '_op_type': 'delete',
+                        '_index': rv[0]['_index'],
+                        '_type': 'indicator',
+                        '_id': rv[0]['_id']
+                    })
+
+                    count += 1
+                    continue
+
 
         if len(actions) > 0:
             try:
