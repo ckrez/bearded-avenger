@@ -92,21 +92,30 @@ class IndicatorManager(IndicatorManagerPlugin):
 
         s = filter_build(s, filters, token=token)
 
-        logger.debug(s.to_dict())
+        #logger.debug(s.to_dict())
 
         start = time.time()
         try:
             es = connections.get_connection(s._using)
-            old_serializer = es.transport.deserializer
-            es.transport.deserializer = self.Deserializer()
-            rv = es.search(
-                index=s._index,
-                doc_type=s._doc_type,
-                body=s.to_dict(),
-                filter_path=['hits.hits._source'],
-                **s._params)
-            # transport caches this, so the tokens mis-fire
-            es.transport.deserializer = old_serializer
+
+            if raw:
+                rv = es.search(
+                    index=s._index,
+                    doc_type=s._doc_type,
+                    body=s.to_dict(),
+                    **s._params)
+            else:
+                old_serializer = es.transport.deserializer
+                es.transport.deserializer = self.Deserializer()
+
+                rv = es.search(
+                    index=s._index,
+                    doc_type=s._doc_type,
+                    body=s.to_dict(),
+                    filter_path=['hits.hits._source'],
+                    **s._params)
+                # transport caches this, so the tokens mis-fire
+                es.transport.deserializer = old_serializer
         except elasticsearch.exceptions.RequestError as e:
             logger.error(e)
             es.transport.deserializer = old_serializer
@@ -129,15 +138,6 @@ class IndicatorManager(IndicatorManagerPlugin):
 
         if data.get('group') and type(data['group']) != list:
             data['group'] = [data['group']]
-
-        if not data.get('lasttime'):
-            data['lasttime'] = arrow.utcnow().datetime.replace(tzinfo=None)
-
-        if not data.get('firsttime'):
-            data['firsttime'] = data['lasttime']
-
-        if not data.get('reporttime'):
-            data['reporttime'] = data['lasttime']
 
         if bulk:
             d = {
@@ -209,7 +209,8 @@ class IndicatorManager(IndicatorManagerPlugin):
             if d.get('rdata'):
                 filters['rdata'] = d['rdata']
 
-            rv = list(self.search(token, filters, sort='reporttime', raw=True))
+            rv = self.search(token, filters, sort='reporttime', raw=True)
+            rv = rv['hits']['hits']
 
             if len(rv) == 0:
                 if was_added.get(d['indicator']):
@@ -238,10 +239,12 @@ class IndicatorManager(IndicatorManagerPlugin):
                 count += 1
                 continue
 
-            i = rv[0]
-            if not self._is_newer(d, i['_source']):
-                logger.debug('skipping...')
-                continue
+            else:
+                i = rv[0]
+
+                if not self._is_newer(d, i['_source']):
+                    logger.debug('skipping...')
+                    continue
 
             # carry the index'd data forward and remove the old index
             # TODO- don't we already have this via the search?
