@@ -16,11 +16,13 @@ from .locks import LockManager
 from .schema import Indicator
 import arrow
 import time
+import os
 
 logger = logging.getLogger('cif.store.zelasticsearch')
 if PYVERSION > 2:
     basestring = (str, bytes)
 
+UPSERT_TRACE = os.environ.get('CIF_STORE_ES_UPSERT_TRACE')
 
 class IndicatorManager(IndicatorManagerPlugin):
     class Deserializer(object):
@@ -182,6 +184,9 @@ class IndicatorManager(IndicatorManagerPlugin):
         if not UPSERT_MODE:
             return self.create_bulk(token, indicators, flush=flush)
 
+        # Create current index if needed
+        index = self._create_index()
+
         count = 0
         was_added = {}  # to deal with es flushing
 
@@ -236,8 +241,10 @@ class IndicatorManager(IndicatorManagerPlugin):
                 expand_ip_idx(d)
 
                 # append create to create set
+                if UPSERT_TRACE:
+                    logger.debug('creating new {}'.format(d['indicator']))
                 actions.append({
-                    '_index': self._current_index(),
+                    '_index': index,
                     '_type': 'indicator',
                     '_source': d,
                 })
@@ -250,6 +257,8 @@ class IndicatorManager(IndicatorManagerPlugin):
 
             # Indicator exists in results
             else:
+
+                # map result
                 i = rv[0]
 
                 # skip older indicators
@@ -257,12 +266,16 @@ class IndicatorManager(IndicatorManagerPlugin):
                     logger.debug('skipping...')
                     continue
 
-                # carry the index'd data forward and remove the old index
-                # TODO- don't we already have this via the search?
-                #i = self.handle.get(index=r['_index'], doc_type='indicator', id=r['_id'])
-
                 # map existing indicator
                 i = i['_source']
+
+                # check to see if duplicate indicator, lasttime in batch
+                if was_added.get(i['indicator']):
+                    if d.get('lasttime') in was_added[i['indicator']]:
+                        logger.debug('skipping: %s' % i['indicator'])
+                        continue
+                else:
+                    was_added[i['indicator']] = set()
 
                 # we're working within the same index
                 if rv[0]['_index'] == self._current_index():
@@ -279,6 +292,8 @@ class IndicatorManager(IndicatorManagerPlugin):
                         i['message'].append(d['message'])
 
                     # append update to create set
+                    if UPSERT_TRACE:
+                        logger.debug('updating same index {}, {}'.format(d['indicator'], rv[0]['_id']))
                     actions.append({
                         '_op_type': 'update',
                         '_index': rv[0]['_index'],
@@ -286,6 +301,9 @@ class IndicatorManager(IndicatorManagerPlugin):
                         '_id': rv[0]['_id'],
                         '_body': {'doc': i}
                     })
+
+                    # add for future batch dedup checks
+                    was_added[d['indicator']].add(d['reporttime'])
 
                     count += 1
                     continue
@@ -305,19 +323,26 @@ class IndicatorManager(IndicatorManagerPlugin):
                         i['message'].append(d['message'])
 
                     # append create to create set
+                    if UPSERT_TRACE:
+                        logger.debug('updating across index {}'.format(d['indicator']))
                     actions.append({
-                        '_index': self._current_index(),
+                        '_index': index,
                         '_type': 'indicator',
                         '_source': i,
                     })
 
                     # delete the old document
+                    if UPSERT_TRACE:
+                        logger.debug('deleting old index {}, {}'.format(d['indicator'], rv[0]['_id']))
                     actions.append({
                         '_op_type': 'delete',
                         '_index': rv[0]['_index'],
                         '_type': 'indicator',
                         '_id': rv[0]['_id']
                     })
+
+                    # add for future batch dedup checks
+                    was_added[d['indicator']].add(d['reporttime'])
 
                     count += 1
                     continue
