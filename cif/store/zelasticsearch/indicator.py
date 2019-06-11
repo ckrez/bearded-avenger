@@ -11,7 +11,7 @@ import logging
 import json
 from .helpers import expand_ip_idx, i_to_id
 from .filters import filter_build
-from .constants import LIMIT, WINDOW_LIMIT, TIMEOUT, UPSERT_MODE, PARTITION
+from .constants import LIMIT, WINDOW_LIMIT, TIMEOUT, UPSERT_MODE, PARTITION, UPSERT_MATCH
 from .locks import LockManager
 from .schema import Indicator
 import arrow
@@ -188,27 +188,50 @@ class IndicatorManager(IndicatorManagerPlugin):
         index = self._create_index()
 
         count = 0
-        was_added = {}  # to deal with es flushing
 
         # http://stackoverflow.com/questions/30111258/elasticsearch-in-equivalent-operator-in-elasticsearch
 
-        sorted(indicators, key=lambda k: k['reporttime'], reverse=True)
+        # aggregate indicators based on dedup criteria
+        agg = {}
+        for d in sorted(indicators, key=lambda k: k['lasttime'], reverse=True):
+            key = []
+
+            for v in UPSERT_MATCH:
+
+                if d.get(v) and isinstance(d[v], basestring):
+                    key.append(d[v])
+
+                if d.get(v) and isinstance(d[v], int):
+                    key.append(str(d[v]))
+
+                if d.get(v) and isinstance(d[v], list):
+                    for k in d[v]:
+                        key.append(k)
+
+            key = "_".join(key)
+
+            # already seen in batch
+            if key in agg:
+                # look for older first times
+                if d.get('firsttime') < agg[key].get('firsttime'):
+                    agg[key]['firsttime'] = d['firsttime']
+                    if d.get('count'):
+                        agg[key]['count'] = agg[key].get('count') + d.get('count')
+
+            # haven't yet seen in batch
+            else:
+                agg[key] = d
+
         actions = []
 
         #self.lockm.lock_aquire()
-        for d in indicators:
-            # check to see if duplicate in batch
-            if was_added.get(d['indicator']):
-                # prefer older reportimes
-                for first in was_added[d['indicator']]:
-                    if d.get('reporttime') < first:
-                        continue
+        for d in agg:
+            d = agg[d]
 
-            filters = {
-                'indicator': d['indicator'],
-                'provider': d['provider'],
-                'limit': 1
-            }
+            filters = {'limit': 1}
+            for x in UPSERT_MATCH:
+                if d.get(x):
+                    filters[x] = d[x]
 
             if d.get('tags'):
                 filters['tags'] = d['tags']
@@ -222,14 +245,6 @@ class IndicatorManager(IndicatorManagerPlugin):
 
             # Indicator does not exist in results
             if len(rv) == 0:
-                # check to see if duplicate indicator, lasttime in batch
-                if was_added.get(d['indicator']):
-                    if d.get('lasttime') in was_added[d['indicator']]:
-                        logger.debug('skipping: %s' % d['indicator'])
-                        continue
-                else:
-                    was_added[d['indicator']] = set()
-
                 if not d.get('count'):
                     d['count'] = 1
 
@@ -242,21 +257,20 @@ class IndicatorManager(IndicatorManagerPlugin):
 
                 # append create to create set
                 if UPSERT_TRACE:
-                    logger.debug('creating new {}'.format(d['indicator']))
+                    logger.debug('upsert: creating new {}'.format(d['indicator']))
                 actions.append({
                     '_index': index,
                     '_type': 'indicator',
                     '_source': d,
                 })
 
-                # add for future batch dedup checks
-                was_added[d['indicator']].add(d['reporttime'])
-
                 count += 1
                 continue
 
             # Indicator exists in results
             else:
+                if UPSERT_TRACE:
+                    logger.debug('upsert: match indicator {}'.format(rv[0]['_id']))
 
                 # map result
                 i = rv[0]
@@ -268,14 +282,6 @@ class IndicatorManager(IndicatorManagerPlugin):
 
                 # map existing indicator
                 i = i['_source']
-
-                # check to see if duplicate indicator, lasttime in batch
-                if was_added.get(i['indicator']):
-                    if d.get('lasttime') in was_added[i['indicator']]:
-                        logger.debug('skipping: %s' % i['indicator'])
-                        continue
-                else:
-                    was_added[i['indicator']] = set()
 
                 # we're working within the same index
                 if rv[0]['_index'] == self._current_index():
@@ -293,7 +299,7 @@ class IndicatorManager(IndicatorManagerPlugin):
 
                     # append update to create set
                     if UPSERT_TRACE:
-                        logger.debug('updating same index {}, {}'.format(d['indicator'], rv[0]['_id']))
+                        logger.debug('upsert: updating same index {}, {}'.format(d['indicator'], rv[0]['_id']))
                     actions.append({
                         '_op_type': 'update',
                         '_index': rv[0]['_index'],
@@ -301,9 +307,6 @@ class IndicatorManager(IndicatorManagerPlugin):
                         '_id': rv[0]['_id'],
                         '_body': {'doc': i}
                     })
-
-                    # add for future batch dedup checks
-                    was_added[d['indicator']].add(d['reporttime'])
 
                     count += 1
                     continue
@@ -324,7 +327,7 @@ class IndicatorManager(IndicatorManagerPlugin):
 
                     # append create to create set
                     if UPSERT_TRACE:
-                        logger.debug('updating across index {}'.format(d['indicator']))
+                        logger.debug('upsert: updating across index {}'.format(d['indicator']))
                     actions.append({
                         '_index': index,
                         '_type': 'indicator',
@@ -333,16 +336,14 @@ class IndicatorManager(IndicatorManagerPlugin):
 
                     # delete the old document
                     if UPSERT_TRACE:
-                        logger.debug('deleting old index {}, {}'.format(d['indicator'], rv[0]['_id']))
+                        logger.debug('upsert: deleting old index {}, {}'.format(d['indicator'], rv[0]['_id']))
+
                     actions.append({
                         '_op_type': 'delete',
                         '_index': rv[0]['_index'],
                         '_type': 'indicator',
                         '_id': rv[0]['_id']
                     })
-
-                    # add for future batch dedup checks
-                    was_added[d['indicator']].add(d['reporttime'])
 
                     count += 1
                     continue
