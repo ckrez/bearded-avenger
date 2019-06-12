@@ -21,6 +21,6 @@ if UPSERT_MODE == '1':
 
 PARTITION = os.getenv('CIF_STORE_ES_PARTITION', 'month')
 
-os.getenv('CIF_STORE_ES_UPSERT_MATCH', 'indicator, provider, confidence, tags, group, tlp, rdata')
+UPSERT_MATCH = os.getenv('CIF_STORE_ES_UPSERT_MATCH', 'indicator, provider, confidence, tags, group, tlp, rdata')
 UPSERT_MATCH = UPSERT_MATCH.split(',')
 UPSERT_MATCH = set((x.strip() for x in UPSERT_MATCH))
