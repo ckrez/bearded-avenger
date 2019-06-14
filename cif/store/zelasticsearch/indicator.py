@@ -11,7 +11,7 @@ import logging
 import json
 from .helpers import expand_ip_idx, i_to_id
 from .filters import filter_build
-from .constants import LIMIT, WINDOW_LIMIT, TIMEOUT, UPSERT_MODE, PARTITION, UPSERT_MATCH
+from .constants import LIMIT, WINDOW_LIMIT, TIMEOUT, UPSERT_MODE, PARTITION, UPSERT_MATCH, AGG_ENABLED
 from .locks import LockManager
 from .schema import Indicator
 import arrow
@@ -87,6 +87,15 @@ class IndicatorManager(IndicatorManagerPlugin):
 
     def search(self, token, filters, sort='reporttime', raw=False, timeout=TIMEOUT):
         limit = filters.get('limit', LIMIT)
+        self.feed = False
+
+        logger.debug(filters.get('feed'))
+
+        # feed request
+        if filters.get('feed') and AGG_ENABLED:
+            self.feed = True
+            self.agg_limit = limit
+            limit = 0
 
         s = Indicator.search(index='{}-*'.format(self.indicators_prefix))
         s = s.params(size=limit, timeout=timeout)
@@ -94,20 +103,26 @@ class IndicatorManager(IndicatorManagerPlugin):
 
         s = filter_build(s, filters, token=token)
 
+        if self.feed:
+            s.aggs.bucket('f_dedup', 'terms',
+                          script='[doc.indicator.value + doc.confidence.value + doc.provider.value + doc.tags.value + doc.group.value]',
+                          size=self.agg_limit).bucket('i_dedup', 'top_hits', size=self.agg_limit)
+
         #logger.debug(s.to_dict())
 
         start = time.time()
         try:
             es = connections.get_connection(s._using)
+            old_serializer = es.transport.deserializer
 
-            if raw:
+            if raw or self.feed:
                 rv = es.search(
                     index=s._index,
                     doc_type=s._doc_type,
                     body=s.to_dict(),
                     **s._params)
+
             else:
-                old_serializer = es.transport.deserializer
                 es.transport.deserializer = self.Deserializer()
 
                 rv = es.search(
@@ -118,10 +133,12 @@ class IndicatorManager(IndicatorManagerPlugin):
                     **s._params)
                 # transport caches this, so the tokens mis-fire
                 es.transport.deserializer = old_serializer
+
         except elasticsearch.exceptions.RequestError as e:
             logger.error(e)
             es.transport.deserializer = old_serializer
             return
+
         # catch all other es errors
         except elasticsearch.ElasticsearchException as e:
             logger.error(e)
@@ -129,6 +146,14 @@ class IndicatorManager(IndicatorManagerPlugin):
             raise CIFException
 
         logger.debug('query took: %0.2f' % (time.time() - start))
+
+        if self.feed:
+            logger.debug('aggregating search')
+            results = {}
+            results['data'] = [key['i_dedup']['hits']['hits'][0]['_source'] for key in
+                                   rv['aggregations']['f_dedup']['buckets']]
+
+            return results['data']
 
         return rv
 

@@ -24,3 +24,10 @@ PARTITION = os.getenv('CIF_STORE_ES_PARTITION', 'month')
 UPSERT_MATCH = os.getenv('CIF_STORE_ES_UPSERT_MATCH', 'indicator, provider, confidence, tags, group, tlp, rdata')
 UPSERT_MATCH = UPSERT_MATCH.split(',')
 UPSERT_MATCH = set((x.strip() for x in UPSERT_MATCH))
+
+# es agg searches for feeds
+AGG_ENABLED = os.getenv('CIF_STORE_ES_AGG_MODE', False)
+if AGG_ENABLED in [1, '1']:
+    AGG_ENABLED = True
+else:
+    AGG_ENABLED = False

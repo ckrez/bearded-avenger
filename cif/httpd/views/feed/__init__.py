@@ -112,6 +112,10 @@ class FeedAPI(MethodView):
         if not filters.get('limit'):
             filters['limit'] = FEEDS_LIMIT
 
+        # signal feed search
+        if not filters.get('feed'):
+            filters['feed'] = True
+
         if current_app.config.get('dummy'):
             if current_app.config.get('feed'):
                 r = DummyClient(remote, pull_token()).indicators_search(filters,
@@ -156,6 +160,7 @@ class FeedAPI(MethodView):
         wl_filters['confidence'] = HTTPD_FEED_WHITELIST_CONFIDENCE
 
         wl_filters['nolog'] = True
+        filters['feed'] = True
         wl_filters['limit'] = FEEDS_WHITELIST_LIMIT
 
         logger.debug('gathering whitelist..')
