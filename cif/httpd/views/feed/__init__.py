@@ -160,7 +160,7 @@ class FeedAPI(MethodView):
         wl_filters['confidence'] = HTTPD_FEED_WHITELIST_CONFIDENCE
 
         wl_filters['nolog'] = True
-        filters['feed'] = True
+        wl_filters['feed'] = True
         wl_filters['limit'] = FEEDS_WHITELIST_LIMIT
 
         logger.debug('gathering whitelist..')
