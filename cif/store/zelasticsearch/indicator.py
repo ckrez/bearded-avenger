@@ -11,7 +11,7 @@ import logging
 import json
 from .helpers import expand_ip_idx, i_to_id
 from .filters import filter_build
-from .constants import LIMIT, WINDOW_LIMIT, TIMEOUT, UPSERT_MODE, PARTITION, UPSERT_MATCH, AGG_ENABLED
+from .constants import LIMIT, WINDOW_LIMIT, TIMEOUT, UPSERT_MODE, PARTITION, UPSERT_MATCH, AGG_ENABLED, REQUEST_TIMEOUT
 from .locks import LockManager
 from .schema import Indicator
 import arrow
@@ -98,7 +98,7 @@ class IndicatorManager(IndicatorManagerPlugin):
             limit = 0
 
         s = Indicator.search(index='{}-*'.format(self.indicators_prefix))
-        s = s.params(size=limit, timeout=timeout)
+        s = s.params(size=limit, timeout=timeout, request_timeout=REQUEST_TIMEOUT)
         s = s.sort('-reporttime', '-lasttime')
 
         s = filter_build(s, filters, token=token)
@@ -106,7 +106,7 @@ class IndicatorManager(IndicatorManagerPlugin):
         if self.feed:
             s.aggs.bucket('f_dedup', 'terms',
                           script='[doc.indicator.value + doc.confidence.value + doc.provider.value + doc.tags.value + doc.group.value]',
-                          size=self.agg_limit).bucket('i_dedup', 'top_hits', size=self.agg_limit)
+                          size=self.agg_limit).bucket('i_dedup', 'top_hits', size=1)
 
         #logger.debug(s.to_dict())
 
