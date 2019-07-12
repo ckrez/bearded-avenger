@@ -319,10 +319,14 @@ class IndicatorManager(IndicatorManagerPlugin):
             if data.get(x):
                 q_filters[x] = data[x]
 
-        logger.debug(q_filters)
-
         if len(q_filters) == 0:
             return '0, must specify valid filter. valid filters: {}'.format(DELETE_FILTERS)
+
+        # carry through limit
+        if data.get('limit'):
+            q_filters['limit'] = data['limit']
+
+        logger.debug(q_filters)
 
         try:
            rv = self.search(token, q_filters, sort='reporttime', raw=True)
