@@ -96,6 +96,9 @@ class FeedAPI(MethodView):
         if 'itype' not in filters:
             return jsonify_unknown('missing itype filter (ipv4, fqdn, url, etc...)', 400)
 
+        if 'tags' not in filters:
+            return jsonify_unknown('missing tag filter (malware, botnet, scanner, etc...)', 400)
+
         # test to make sure feed type exists
         feed_type = feed_factory(filters['itype'])
         if feed_type is None:
