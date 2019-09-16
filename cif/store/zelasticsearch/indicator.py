@@ -85,11 +85,9 @@ class IndicatorManager(IndicatorManagerPlugin):
         self.last_index_value = idx
         return idx
 
-    def search(self, token, filters, sort='reporttime', raw=False, timeout=TIMEOUT):
+    def search(self, token, filters, sort='reporttime', raw=False, current=False, timeout=TIMEOUT):
         limit = filters.get('limit', LIMIT)
         self.feed = False
-
-        logger.debug(filters.get('feed'))
 
         # feed request
         if filters.get('feed') and AGG_ENABLED:
@@ -97,7 +95,12 @@ class IndicatorManager(IndicatorManagerPlugin):
             self.agg_limit = limit
             limit = 0
 
-        s = Indicator.search(index='{}-*'.format(self.indicators_prefix))
+        # current index search check
+        if current:
+            s = Indicator.search(index=self._current_index())
+        else:
+            s = Indicator.search(index='{}-*'.format(self.indicators_prefix))
+
         s = s.params(size=limit, timeout=timeout, request_timeout=REQUEST_TIMEOUT)
         s = s.sort('-reporttime', '-lasttime')
 
@@ -265,7 +268,7 @@ class IndicatorManager(IndicatorManagerPlugin):
                 filters['rdata'] = d['rdata']
 
             # search for existing, return latest record
-            rv = self.search(token, filters, sort='reporttime', raw=True)
+            rv = self.search(token, filters, sort='reporttime', raw=True, current=True)
             rv = rv['hits']['hits']
 
             # Indicator does not exist in results
