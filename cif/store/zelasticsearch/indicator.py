@@ -268,7 +268,12 @@ class IndicatorManager(IndicatorManagerPlugin):
                 filters['rdata'] = d['rdata']
 
             # search for existing, return latest record
-            rv = self.search(token, filters, sort='reporttime', raw=True, current=True)
+            try:
+                rv = self.search(token, filters, sort='reporttime', raw=True, current=True)
+            except Exception as e:
+                logger.error(e)
+                raise e
+
             rv = rv['hits']['hits']
 
             # Indicator does not exist in results
